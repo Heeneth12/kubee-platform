@@ -1,0 +1,15 @@
+package com.kubee.inventory.purchase.returns.repository;
+
+import com.kubee.inventory.purchase.returns.entity.PurchaseReturnItem;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+
+@Repository
+public interface PurchaseReturnItemRepository extends JpaRepository<PurchaseReturnItem, Long> {
+
+    List<PurchaseReturnItem> findByPurchaseReturnId(Long returnId);
+
+    List<PurchaseReturnItem> findByPurchaseReturnIdIn(List<Long> returnIds);
+}

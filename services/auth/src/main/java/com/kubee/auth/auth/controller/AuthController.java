@@ -1,0 +1,123 @@
+package com.kubee.auth.auth.controller;
+
+
+import com.kubee.auth.auth.dto.AuthResponse;
+import com.kubee.auth.auth.dto.ForgotPasswordRequest;
+import com.kubee.auth.auth.dto.GoogleSignInRequest;
+import com.kubee.auth.auth.dto.ResetPasswordRequest;
+import com.kubee.auth.auth.dto.ResendOtpRequest;
+import com.kubee.auth.auth.dto.SignInRequest;
+import com.kubee.auth.auth.dto.TokenRefreshRequest;
+import com.kubee.auth.auth.service.AuthService;
+import com.kubee.auth.tenant.dto.*;
+import com.kubee.auth.tenant.service.TenantService;
+import com.kubee.auth.user.dto.UserInitResponse;
+import com.kubee.common.CommonResponse;
+import com.kubee.common.ResponseResource;
+import com.kubee.common.CommonException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.web.bind.annotation.*;
+
+@Slf4j
+@RestController
+@RequestMapping("/api/v1/auth")
+@RequiredArgsConstructor
+public class AuthController {
+
+    private final TenantService tenantService;
+    private final AuthService authService;
+
+
+    @PostMapping(value = "/register", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<TenantRegistrationResponse> registerTenant(@Valid @RequestBody TenantRegistrationRequest request) throws CommonException {
+        log.info("Entered register tenant with : {}", request);
+        TenantRegistrationResponse response = tenantService.registerTenant(request);
+        return ResponseResource.success(HttpStatus.CREATED, response, "Tenant registered successfully");
+    }
+
+    @PostMapping(value = "/signin", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<AuthResponse> signIn(@Valid @RequestBody SignInRequest request) throws CommonException {
+        log.info("Entered signin with : {}", request);
+        AuthResponse response = authService.signIn(request);
+        return ResponseResource.success(HttpStatus.OK, response, "Sign in successful");
+    }
+
+    @GetMapping(value = "/user/init", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<UserInitResponse> initUser(HttpServletRequest request) throws CommonException {
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            throw new CommonException("Authorization header missing or malformed", HttpStatus.UNAUTHORIZED);
+        }
+        String token = authHeader.substring(7);
+        UserInitResponse response = authService.initUser(token);
+        return ResponseResource.success(HttpStatus.OK, response, "User init successful");
+    }
+
+    @PostMapping(value = "/refresh", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<AuthResponse> refreshToken(@Valid @RequestBody TokenRefreshRequest request) throws CommonException {
+        log.info("Entered refresh token with : {}", request);
+        AuthResponse response = authService.refreshToken(request);
+        return ResponseResource.success(HttpStatus.OK, response, "Token refreshed successfully");
+    }
+
+    @PostMapping(value = "/google", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<AuthResponse> signInWithGoogle(@Valid @RequestBody GoogleSignInRequest request) throws CommonException {
+        log.info("Entered Google Sign-In");
+        AuthResponse response = authService.signInWithGoogle(request);
+        return ResponseResource.success(HttpStatus.OK, response, "Google Sign-In successful");
+    }
+
+    @GetMapping(value = "/validate", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<CommonResponse> validateToken(@RequestHeader(HttpHeaders.AUTHORIZATION) String bearerToken) throws CommonException {
+        log.info("Entered validateToken check");
+        String token = bearerToken;
+        if (bearerToken != null && bearerToken.startsWith("Bearer ")) {
+            token = bearerToken.substring(7);
+        }
+        CommonResponse response = authService.validateToken(token);
+        return ResponseResource.success(HttpStatus.OK, response, "Token is valid");
+    }
+
+    @PostMapping(value = "/signout", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<CommonResponse> signout(
+            @RequestHeader(HttpHeaders.AUTHORIZATION) String bearerToken) throws CommonException {
+        log.info("Entered sign out");
+        String token = bearerToken.startsWith("Bearer ") ? bearerToken.substring(7) : bearerToken;
+        CommonResponse response = authService.signout(token);
+        return ResponseResource.success(HttpStatus.OK, response, "Signed out successfully");
+    }
+
+    @PostMapping(value = "/forgot-password", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<CommonResponse> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        log.info("Entered forgot-password");
+        CommonResponse response = authService.forgotPassword(request);
+        return ResponseResource.success(HttpStatus.OK, response, response.getMessage());
+    }
+
+    @PostMapping(value = "/reset-password", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<CommonResponse> resetPassword(@Valid @RequestBody ResetPasswordRequest request) throws CommonException {
+        log.info("Entered reset-password");
+        CommonResponse response = authService.resetPassword(request);
+        return ResponseResource.success(HttpStatus.OK, response, "Password reset successfully");
+    }
+
+    @PostMapping(value = "/resend-otp", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<CommonResponse> resendOtp(@Valid @RequestBody ResendOtpRequest request) throws CommonException {
+        log.info("Resending OTP for tenantId: {}", request.getTenantId());
+        CommonResponse response = tenantService.resendOtp(request.getTenantId());
+        return ResponseResource.success(HttpStatus.OK, response, "OTP resent successfully");
+    }
+
+    @PostMapping(value = "/verifyTenant", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<AuthResponse> verifyTenant(@RequestParam Long tenantId, @RequestParam String otp) throws CommonException {
+        log.info("verify tenant email ID: {}", tenantId);
+        AuthResponse response = tenantService.verifyTenantEmail(tenantId, otp);
+        return ResponseResource.success(HttpStatus.OK, response, "User fetched successfully");
+    }
+}

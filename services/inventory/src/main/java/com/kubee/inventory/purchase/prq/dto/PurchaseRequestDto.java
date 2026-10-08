@@ -1,0 +1,32 @@
+package com.kubee.inventory.purchase.prq.dto;
+
+
+import com.kubee.inventory.purchase.prq.entity.PrqSource;
+import com.kubee.inventory.purchase.prq.entity.PrqStatus;
+import com.kubee.inventory.utils.common.dto.UserMiniDto;
+import lombok.*;
+
+import java.math.BigDecimal;
+import java.util.Date;
+import java.util.List;
+
+@Getter
+@Setter
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+public class PurchaseRequestDto {
+    private Long id;
+    private Long vendorId;
+    private Long warehouseId;
+    private Long requestedBy;
+    private String department;
+    private String prqNumber;
+    private PrqStatus status;
+    private PrqSource source;
+    private BigDecimal totalEstimatedAmount;
+    private String notes;
+    private Date createdAt;
+    private UserMiniDto vendorDetails;
+    private List<PurchaseRequestItemDto> items;
+}

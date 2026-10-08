@@ -1,0 +1,901 @@
+package com.kubee.auth.tenant.service;
+
+
+import com.kubee.auth.auth.dto.AuthResponse;
+import com.kubee.auth.common.dto.AddressDto;
+import com.kubee.auth.common.dto.ApplicationDto;
+import com.kubee.auth.common.entity.Address;
+import com.kubee.auth.common.entity.Application;
+import com.kubee.auth.common.entity.EntityType;
+import com.kubee.auth.common.entity.Module;
+import com.kubee.auth.common.entity.Privilege;
+import com.kubee.auth.common.entity.Role;
+import com.kubee.auth.common.repository.ApplicationRepository;
+import com.kubee.auth.common.repository.ModuleRepository;
+import com.kubee.auth.common.repository.RoleRepository;
+import com.kubee.security.JwtTokenProvider;
+import com.kubee.auth.subscription.dto.SubscriptionDto;
+import com.kubee.auth.subscription.dto.SubscriptionPlanDto;
+import com.kubee.auth.subscription.entity.Subscription;
+import com.kubee.auth.subscription.entity.SubscriptionPlan;
+import com.kubee.auth.subscription.entity.SubscriptionStatus;
+import com.kubee.auth.subscription.repository.SubscriptionPlanRepository;
+import com.kubee.auth.subscription.repository.SubscriptionRepository;
+import com.kubee.auth.tenant.dto.*;
+import com.kubee.auth.tenant.entity.Tenant;
+import com.kubee.auth.tenant.entity.TenantDetails;
+import com.kubee.auth.tenant.repository.TenantDetailsRepository;
+import com.kubee.auth.tenant.repository.TenantRepository;
+import com.kubee.auth.user.dto.UserMiniDto;
+import com.kubee.auth.user.entity.*;
+import com.kubee.auth.user.repository.UserApplicationRepository;
+import com.kubee.auth.user.repository.UserModulePrivilegeRepository;
+import com.kubee.auth.user.repository.UserRepository;
+import com.kubee.auth.user.repository.UserRoleRepository;
+import com.kubee.auth.utils.EmailService;
+import com.kubee.security.UserContextUtil;
+import com.kubee.common.CommonResponse;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
+import com.kubee.common.Status;
+import com.kubee.common.CommonException;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class TenantService {
+
+    private final TenantRepository tenantRepository;
+    private final UserRepository userRepository;
+    private final RoleRepository roleRepository;
+    private final UserRoleRepository userRoleRepository;
+    private final ApplicationRepository applicationRepository;
+    private final UserApplicationRepository userApplicationRepository;
+    private final UserModulePrivilegeRepository userModulePrivilegeRepository;
+    private final ModuleRepository moduleRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final EmailService emailService;
+    private final SubscriptionPlanRepository subscriptionPlanRepository;
+    private final SubscriptionRepository subscriptionRepository;
+    private final TenantDetailsRepository detailsRepository;
+    private final JwtTokenProvider jwtTokenProvider;
+    private final CacheManager cacheManager;
+
+
+    @Transactional
+    public TenantRegistrationResponse registerTenant(TenantRegistrationRequest request) {
+
+        // 1. Validate email doesn't already exist
+        if (userRepository.existsByEmail(request.getAdminEmail())) {
+            throw new CommonException("Email already registered", HttpStatus.CONFLICT);
+        }
+
+        // 2. Generate unique tenant code
+        String tenantCode = generateTenantCode(request.getTenantName());
+        if (tenantRepository.existsByTenantCode(tenantCode)) {
+            tenantCode = tenantCode + "-" + System.currentTimeMillis();
+        }
+
+        Application app = applicationRepository.findByAppKey(request.getAppKey())
+                .orElseThrow(() -> new CommonException("Invalid application key", HttpStatus.BAD_REQUEST));
+
+        // 3. Create Tenant
+        Tenant tenant = Tenant.builder()
+                .tenantName(request.getTenantName())
+                .tenantCode(tenantCode)
+                .applications(Set.of(app))
+                .isPersonal(Boolean.TRUE.equals(request.getIsPersonal()))
+                .isActive(true)
+                .isVerify(false)
+                .build();
+
+        tenant = tenantRepository.save(tenant);
+
+        TenantDetails tenantDetails = TenantDetails.builder()
+                .tenant(tenant)
+                .businessType(request.getBusinessType())
+                .baseCurrency("INR")
+                .timeZone("Asia/Kolkata")
+                .legalName(request.getTenantName())
+                .build();
+
+        tenant.setTenantDetails(tenantDetails);
+
+        SubscriptionPlan defaultPlan = trialPlanFor(app);
+
+        LocalDateTime now = LocalDateTime.now();
+
+        //Create the Subscription object
+        Subscription subscription = Subscription.builder()
+                .tenant(tenant)
+                .plan(defaultPlan)
+                .status(SubscriptionStatus.ACTIVE)
+                .startDate(now)
+                .isPrimary(true)
+                .endDate(now.plusDays(defaultPlan.getDurationDays()))
+                .autoRenew(false)
+                .build();
+
+        subscriptionRepository.save(subscription);
+        tenantRepository.save(tenant);
+
+        //ADD ADDRESS (NEW LOGIC)
+        if (request.getAddress() != null) {
+            Address tenantAddress = Address.builder()
+                    .entityType(EntityType.TENANT)
+                    .entityId(tenant.getId())
+                    .addressLine1(request.getAddress().getAddressLine1())
+                    .addressLine2(request.getAddress().getAddressLine2())
+                    .route(request.getAddress().getRoute())
+                    .area(request.getAddress().getArea())
+                    .city(request.getAddress().getCity())
+                    .state(request.getAddress().getState())
+                    .country(request.getAddress().getCountry())
+                    .pinCode(request.getAddress().getPinCode())
+                    .addressType(request.getAddress().getType())
+                    .build();
+
+            if (tenant.getAddresses() == null) {
+                tenant.setAddresses(new HashSet<>());
+            }
+            tenant.getAddresses().add(tenantAddress);
+
+            tenant = tenantRepository.save(tenant);
+        }
+
+        // 4. Create Admin User
+        User adminUser = User.builder()
+                .fullName(request.getAdminFullName())
+                .email(request.getAdminEmail())
+                .passwordHash(passwordEncoder.encode(request.getPassword()))
+                .phone(request.getAdminPhone())
+                .userType(UserType.SUPER_ADMIN)
+                .isActive(true)
+                .tenant(tenant)
+                .build();
+
+        adminUser = userRepository.save(adminUser);
+
+        // setting user application where it give access modules and preivlages
+        UserApplication userApplication = UserApplication.builder()
+                .user(adminUser)
+                .application(app)
+                .isActive(true)
+                .build();
+        adminUser.setUserApplications(Set.of(userApplication));
+
+        userApplicationRepository.save(userApplication);
+
+        // 5. Set tenant admin
+        tenant.setTenantAdmin(adminUser);
+        tenant = tenantRepository.save(tenant);
+
+
+        // Give Super Admin full access to all modules & privileges of this application
+        List<Module> modules = moduleRepository.findByApplicationId(app.getId());
+        for (Module module : modules) {
+            for (Privilege privilege : module.getPrivileges()) {
+                UserModulePrivilege ump = UserModulePrivilege.builder()
+                        .userApplication(userApplication)
+                        .privilege(privilege)
+                        .isActive(true)
+                        .build();
+                userModulePrivilegeRepository.save(ump);
+            }
+        }
+
+
+        // 6. Create SUPER_ADMIN role for this tenant
+        Role superAdminRole = Role.builder()
+                .roleName("Super Admin")
+                .roleKey("SUPER_ADMIN")
+                .description("Full access to all applications and modules")
+                .tenant(tenant)
+                .isActive(true)
+                .isSystemRole(true)
+                .build();
+
+        superAdminRole = roleRepository.save(superAdminRole);
+
+
+        // 7. Assign SUPER_ADMIN role to admin user
+        UserRole userRole = UserRole.builder()
+                .user(adminUser)
+                .role(superAdminRole)
+                .isActive(true)
+                .build();
+
+        String otp = String.format("%06d", new Random().nextInt(999999));
+        Cache otpCacheRef = cacheManager.getCache("otpCache");
+        if (otpCacheRef != null) {
+            otpCacheRef.put("otp:tenant:" + tenant.getId(), otp);
+        }
+        emailService.sendOtpEmail(adminUser.getEmail(), otp);
+
+        userRoleRepository.save(userRole);
+        emailService.sendWelcomeEmail(request.getAdminEmail(), request.getTenantName());
+
+        // 9. Return response
+        return TenantRegistrationResponse.builder()
+                .tenantId(tenant.getId())
+                .tenantName(tenant.getTenantName())
+                .tenantCode(tenant.getTenantCode())
+                .adminUserId(adminUser.getId())
+                .adminEmail(adminUser.getEmail())
+                .message("Tenant registered successfully")
+                .build();
+    }
+
+
+    @Transactional
+    public AuthResponse verifyTenantEmail(Long tenantId, String otp) throws CommonException {
+
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new CommonException("Tenant not found", HttpStatus.NOT_FOUND));
+
+        if (Boolean.TRUE.equals(tenant.getIsVerify())) {
+            throw new CommonException("Tenant already verified", HttpStatus.CONFLICT);
+        }
+
+        Cache otpCacheRef = cacheManager.getCache("otpCache");
+        String cachedOtp = otpCacheRef != null
+                ? otpCacheRef.get("otp:tenant:" + tenantId, String.class)
+                : null;
+
+        if (cachedOtp == null) {
+            throw new CommonException("OTP has expired or was not found. Please request a new OTP.", HttpStatus.GONE);
+        }
+
+        if (!cachedOtp.equals(otp)) {
+            throw new CommonException("Invalid OTP", HttpStatus.BAD_REQUEST);
+        }
+
+        if (otpCacheRef != null) {
+            otpCacheRef.evict("otp:tenant:" + tenantId);
+        }
+
+        tenant.setIsVerify(true);
+        tenantRepository.save(tenant);
+
+        User user = userRepository.findByEmail(tenant.getTenantAdmin().getEmail())
+                .orElseThrow(() -> new CommonException("Admin user not found", HttpStatus.NOT_FOUND));
+
+        String roles = extractUserRoles(user);
+
+        String accessToken = jwtTokenProvider.generateAccessToken(
+                user.getId(),
+                user.getUserUuid(),
+                user.getEmail(),
+                user.getTenant().getId(),
+                user.getTenant().getTenantUuid(),
+                user.getUserType().name(),
+                roles,
+                user.getAccountScope().name()
+        );
+        String refreshToken = jwtTokenProvider.generateRefreshToken(user.getId());
+
+        return AuthResponse.builder()
+                .accessToken(accessToken)
+                .refreshToken(refreshToken)
+                .tokenType("Bearer")
+                .message("Email verified successfully")
+                .build();
+    }
+
+    /**
+     * Extract active user roles as comma-separated string
+     *
+     * @param user User entity with roles
+     * @return Comma-separated role keys (e.g., "ADMIN,VIEWER") or empty string
+     */
+    private String extractUserRoles(User user) {
+        if (user.getUserRoles() == null) {
+            return "";
+        }
+        return user.getUserRoles().stream()
+                .filter(UserRole::getIsActive)
+                .map(ur -> ur.getRole().getRoleKey())
+                .reduce((a, b) -> a + "," + b)
+                .orElse("");
+    }
+
+    @Transactional(readOnly = true)
+    public CommonResponse resendOtp(Long tenantId) throws CommonException {
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new CommonException("Tenant not found", HttpStatus.NOT_FOUND));
+
+        if (Boolean.TRUE.equals(tenant.getIsVerify())) {
+            throw new CommonException("Tenant is already verified", HttpStatus.CONFLICT);
+        }
+
+        User admin = userRepository.findByEmail(tenant.getTenantAdmin().getEmail())
+                .orElseThrow(() -> new CommonException("Admin user not found", HttpStatus.NOT_FOUND));
+
+        String otp = String.format("%06d", new Random().nextInt(999999));
+        Cache otpCacheRef = cacheManager.getCache("otpCache");
+        if (otpCacheRef != null) {
+            otpCacheRef.put("otp:tenant:" + tenantId, otp);
+        }
+        emailService.sendOtpEmail(admin.getEmail(), otp);
+
+        return CommonResponse.builder()
+                .status(Status.SUCCESS)
+                .message("OTP resent successfully")
+                .build();
+    }
+
+    @Transactional
+    public CommonResponse toggleTenantStatus(Long tenantId) throws CommonException {
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new CommonException("Tenant not found", HttpStatus.NOT_FOUND));
+
+        boolean deactivating = Boolean.TRUE.equals(tenant.getIsActive());
+        if (deactivating) {
+            long activeUserCount = userRepository.countByTenant_IdAndIsActive(tenantId, true);
+            if (activeUserCount > 0) {
+                throw new CommonException(
+                        "Cannot deactivate tenant with " + activeUserCount + " active user(s). Deactivate all users first.",
+                        HttpStatus.CONFLICT);
+            }
+        }
+
+        tenant.setIsActive(!tenant.getIsActive());
+        tenantRepository.save(tenant);
+
+        String statusLabel = Boolean.TRUE.equals(tenant.getIsActive()) ? "Active" : "Inactive";
+        return CommonResponse.builder()
+                .id(tenantId.toString())
+                .status(Status.SUCCESS)
+                .message("Tenant status toggled. Current status: " + statusLabel)
+                .build();
+    }
+
+    @Transactional
+    public CommonResponse deleteTenantAddress(Long tenantId, Long addressId) throws CommonException {
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new CommonException("Tenant not found", HttpStatus.NOT_FOUND));
+
+        if (tenant.getAddresses() == null || tenant.getAddresses().isEmpty()) {
+            throw new CommonException("No addresses found for this tenant", HttpStatus.NOT_FOUND);
+        }
+
+        Address addressToDelete = tenant.getAddresses().stream()
+                .filter(a -> a.getId() != null && a.getId().equals(addressId))
+                .findFirst()
+                .orElseThrow(() -> new CommonException("Address not found for this tenant", HttpStatus.NOT_FOUND));
+
+        tenant.getAddresses().remove(addressToDelete);
+        tenantRepository.save(tenant);
+
+        return CommonResponse.builder()
+                .id(addressId.toString())
+                .status(Status.SUCCESS)
+                .message("Tenant address deleted successfully")
+                .build();
+    }
+
+    @Transactional
+    public CommonResponse updateTenant(Long tenantId, TenantRegistrationRequest request) {
+
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new CommonException("Tenant not found", HttpStatus.NOT_FOUND));
+
+        if (request.getAdminPhone() != null && !request.getAdminPhone().isBlank()) {
+            User admin = tenant.getTenantAdmin();
+            if (admin != null) {
+                admin.setPhone(request.getAdminPhone());
+                userRepository.save(admin);
+            }
+        }
+
+        if (request.getAddress() != null) {
+            handleAddressUpdate(tenant, request.getAddress());
+        }
+
+        tenantRepository.save(tenant);
+
+        return CommonResponse
+                .builder()
+                .status(Status.SUCCESS)
+                .message("Tenant successfully updated")
+                .build();
+    }
+
+    @Transactional(readOnly = true)
+    public Page<TenantDto> getTenants(Integer page, Integer size) {
+
+        Pageable pageable = PageRequest.of(page, size);
+
+        Page<Tenant> tenants = tenantRepository.findAll(pageable);
+
+        return tenants.map(this::dtoConstructor);
+    }
+
+
+    @Transactional(readOnly = true)
+    public TenantDto getTenantById(Long tenantId) {
+
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new CommonException("Tenant not found", HttpStatus.NOT_FOUND));
+
+        return dtoConstructor(tenant);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<Long, TenantDto> getTenantsByIds(List<Long> tenantIds) {
+
+        if (tenantIds == null || tenantIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Set<Long> uniqueIds = new HashSet<>(tenantIds);
+        if (!UserContextUtil.isPlatformUser()) {
+            uniqueIds.retainAll(Collections.singleton(UserContextUtil.getTenantId()));
+        }
+
+        log.info("Fetching bulk data for {} unique tenant IDs", uniqueIds.size());
+
+        List<Tenant> tenants = tenantRepository.findByIdIn(uniqueIds.stream().toList());
+
+        return tenants.stream()
+                .map(this::dtoConstructor)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toMap(
+                        TenantDto::getId,
+                        Function.identity(),
+                        (existing, duplicate) -> existing
+                ));
+    }
+
+    @Transactional
+    public User registerGoogleTenant(String email, String fullName, String pictureUrl, String appKey) {
+
+        if (userRepository.existsByEmail(email)) {
+            return userRepository.findByEmail(email).orElseThrow();
+        }
+
+        //Default App Key if missing (Adjust "EZH_CORE" to your actual default app key)
+        String targetAppKey = (appKey != null && !appKey.isEmpty()) ? appKey : "EZH_INV_001";
+
+        Application app = applicationRepository.findByAppKey(targetAppKey)
+                .orElseThrow(() -> new CommonException("Invalid application key", HttpStatus.BAD_REQUEST));
+
+        // 3. Generate Codes
+        String tenantCode = generateTenantCode(fullName);
+        if (tenantRepository.existsByTenantCode(tenantCode)) {
+            tenantCode = tenantCode + "-" + System.currentTimeMillis();
+        }
+
+        // 4. Create Tenant
+        Tenant tenant = Tenant.builder()
+                .tenantName(fullName + "'s Workspace")
+                .tenantCode(tenantCode)
+                .applications(Set.of(app))
+                .isPersonal(true)
+                .isActive(true)
+                .build();
+        tenant = tenantRepository.save(tenant);
+
+        SubscriptionPlan defaultPlan = trialPlanFor(app);
+
+        LocalDateTime now = LocalDateTime.now();
+        //Create the Subscription object
+        Subscription subscription = Subscription.builder()
+                .tenant(tenant)
+                .plan(defaultPlan)
+                .status(SubscriptionStatus.ACTIVE)
+                .startDate(now)
+                .endDate(now.plusDays(defaultPlan.getDurationDays()))
+                .autoRenew(false)
+                .build();
+
+        subscriptionRepository.save(subscription);
+
+        // 5. Create User (No Password)
+        User adminUser = User.builder()
+                .fullName(fullName)
+                .email(email)
+                .passwordHash(passwordEncoder.encode("GOOGLE_AUTH_USER"))
+                .isActive(true)
+                .tenant(tenant)
+                .build();
+        adminUser = userRepository.save(adminUser);
+
+        //Setup Access (UserApplication)
+        UserApplication userApplication = UserApplication.builder()
+                .user(adminUser)
+                .application(app)
+                .isActive(true)
+                .build();
+        userApplicationRepository.save(userApplication);
+        adminUser.setUserApplications(Set.of(userApplication));
+
+        //Assign Tenant Admin
+        tenant.setTenantAdmin(adminUser);
+        tenantRepository.save(tenant);
+
+        //Assign Privileges (Full Access for Personal Tenant)
+        List<Module> modules = moduleRepository.findByApplicationId(app.getId());
+        for (Module module : modules) {
+            for (Privilege privilege : module.getPrivileges()) {
+                UserModulePrivilege ump = UserModulePrivilege.builder()
+                        .userApplication(userApplication)
+                        .privilege(privilege)
+                        .isActive(true)
+                        .build();
+                userModulePrivilegeRepository.save(ump);
+            }
+        }
+
+        //Create & Assign Super Admin Role
+        Role superAdminRole = Role.builder()
+                .roleName("Super Admin")
+                .roleKey("SUPER_ADMIN")
+                .description("System generated admin role")
+                .tenant(tenant)
+                .isActive(true)
+                .isSystemRole(true)
+                .build();
+        superAdminRole = roleRepository.save(superAdminRole);
+
+        UserRole userRole = UserRole.builder()
+                .user(adminUser)
+                .role(superAdminRole)
+                .isActive(true)
+                .build();
+        userRoleRepository.save(userRole);
+        emailService.sendWelcomeEmail(email, fullName);
+        log.info("Successfully auto-registered Google user: {}", email);
+        return adminUser;
+    }
+
+
+    @Transactional
+    public CommonResponse createTenantDetails(Long tenantId, TenantDetailsDto dto) throws CommonException {
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new CommonException("Tenant not found", HttpStatus.NOT_FOUND));
+
+        // Check if details already exist to prevent duplicates
+        if (tenant.getTenantDetails() != null) {
+            throw new CommonException("Business details already exist for tenant: " + tenant.getTenantName(), HttpStatus.CONFLICT);
+        }
+
+        TenantDetails details = mapDtoToEntity(dto);
+        details.setTenant(tenant);
+
+        TenantDetails saved = detailsRepository.save(details);
+
+        return CommonResponse.builder()
+                .id(saved.getId().toString())
+                .message("Business details successfully initialized for tenant: " + tenant.getTenantName())
+                .status(Status.SUCCESS)
+                .build();
+    }
+
+
+    @Transactional
+    public CommonResponse updateTenantDetails(Long tenantId, TenantDetailsDto dto) throws CommonException {
+        TenantDetails details = detailsRepository.findByTenantId(tenantId)
+                .orElseThrow(() -> new CommonException("Business details not found for the requested tenant", HttpStatus.NOT_FOUND));
+
+        // Update fields
+        details.setLegalName(dto.getLegalName());
+        details.setBusinessType(dto.getBusinessType());
+        details.setBaseCurrency(dto.getBaseCurrency());
+        details.setTimeZone(dto.getTimeZone());
+        details.setGstNumber(dto.getGstNumber());
+        details.setPanNumber(dto.getPanNumber());
+        details.setSupportEmail(dto.getSupportEmail());
+        details.setContactPhone(dto.getContactPhone());
+        details.setWebsite(dto.getWebsite());
+        details.setLogoUrl(dto.getLogoUrl());
+
+        TenantDetails updated = detailsRepository.save(details);
+
+        return CommonResponse.builder()
+                .id(updated.getId().toString())
+                .message("Business profile for '" + updated.getLegalName() + "' has been updated successfully.")
+                .status(Status.SUCCESS)
+                .build();
+    }
+
+
+    @Transactional(readOnly = true)
+    public TenantDetailsDto getTenantDetailsByTenantId(Long tenantId) throws CommonException {
+        // We fetch by tenantId directly using the repository method
+        return detailsRepository.findByTenantId(tenantId)
+                .map(this::mapEntityToDto)
+                .orElseThrow(() -> new CommonException("No business details found for Tenant ID: " + tenantId, HttpStatus.NOT_FOUND));
+    }
+
+    @Transactional
+    public CommonResponse createTenantAddress(Long tenantId, AddressDto dto) throws CommonException {
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new CommonException("Tenant not found", HttpStatus.NOT_FOUND));
+
+        if (tenant.getAddresses() == null) {
+            tenant.setAddresses(new HashSet<>());
+        }
+
+        boolean addressTypeExists = tenant.getAddresses().stream()
+                .anyMatch(address -> address.getAddressType() == dto.getType());
+
+        if (addressTypeExists) {
+            throw new CommonException("Address already exists for type: " + dto.getType(), HttpStatus.CONFLICT);
+        }
+
+        Address address = Address.builder()
+                .entityType(EntityType.TENANT)
+                .entityId(tenantId)
+                .addressLine1(dto.getAddressLine1())
+                .addressLine2(dto.getAddressLine2())
+                .route(dto.getRoute())
+                .area(dto.getArea())
+                .city(dto.getCity())
+                .state(dto.getState())
+                .country(dto.getCountry())
+                .pinCode(dto.getPinCode())
+                .addressType(dto.getType())
+                .build();
+
+        tenant.getAddresses().add(address);
+        tenantRepository.save(tenant);
+
+        return CommonResponse.builder()
+                .id(String.valueOf(address.getId()))
+                .message("Tenant address created successfully")
+                .status(Status.SUCCESS)
+                .build();
+    }
+
+    @Transactional
+    public CommonResponse updateTenantAddress(Long tenantId, Long addressId, AddressDto dto) throws CommonException {
+        Tenant tenant = tenantRepository.findById(tenantId)
+                .orElseThrow(() -> new CommonException("Tenant not found", HttpStatus.NOT_FOUND));
+
+        if (tenant.getAddresses() == null || tenant.getAddresses().isEmpty()) {
+            throw new CommonException("No addresses found for this tenant", HttpStatus.NOT_FOUND);
+        }
+
+        Address address = tenant.getAddresses().stream()
+                .filter(item -> item.getId().equals(addressId))
+                .findFirst()
+                .orElseThrow(() -> new CommonException("Address not found for this tenant", HttpStatus.NOT_FOUND));
+
+        boolean duplicateType = tenant.getAddresses().stream()
+                .filter(item -> !item.getId().equals(addressId))
+                .anyMatch(item -> item.getAddressType() == dto.getType());
+
+        if (duplicateType) {
+            throw new CommonException("Address already exists for type: " + dto.getType(), HttpStatus.CONFLICT);
+        }
+
+        address.setAddressLine1(dto.getAddressLine1());
+        address.setAddressLine2(dto.getAddressLine2());
+        address.setRoute(dto.getRoute());
+        address.setArea(dto.getArea());
+        address.setCity(dto.getCity());
+        address.setState(dto.getState());
+        address.setCountry(dto.getCountry());
+        address.setPinCode(dto.getPinCode());
+        address.setAddressType(dto.getType());
+
+        tenantRepository.save(tenant);
+
+        return CommonResponse.builder()
+                .id(String.valueOf(address.getId()))
+                .message("Tenant address updated successfully")
+                .status(Status.SUCCESS)
+                .build();
+    }
+
+    // Helper method to generate tenant code
+    private String generateTenantCode(String tenantName) {
+        String sanitized = tenantName.toUpperCase().replaceAll("[^A-Z0-9]", "");
+        if (sanitized.isEmpty()) sanitized = "TENANT";
+        return sanitized.substring(0, Math.min(sanitized.length(), 6));
+    }
+
+
+    private TenantDto dtoConstructor(Tenant tenant) {
+
+        if (tenant == null) {
+            return null;
+        }
+
+        Set<AddressDto> addressDtos = null;
+        if (tenant.getAddresses() != null && !tenant.getAddresses().isEmpty()) {
+            addressDtos = tenant.getAddresses().stream()
+                    .map(addr -> AddressDto.builder()
+                            .id(addr.getId())
+                            .addressLine1(addr.getAddressLine1())
+                            .addressLine2(addr.getAddressLine2())
+                            .route(addr.getRoute())
+                            .area(addr.getArea())
+                            .city(addr.getCity())
+                            .state(addr.getState())
+                            .country(addr.getCountry())
+                            .pinCode(addr.getPinCode())
+                            .type(addr.getAddressType())
+                            .isPrimary(addr.getIsPrimary())
+                            .build())
+                    .collect(Collectors.toSet());
+        }
+
+        // Map Tenant Admin (User Entity -> UserMiniDto)
+        UserMiniDto adminDto = null;
+        if (tenant.getTenantAdmin() != null) {
+            adminDto = UserMiniDto.builder()
+                    .id(tenant.getTenantAdmin().getId())
+                    .UserUuid(tenant.getTenantAdmin().getUserUuid())
+                    .userType(tenant.getTenantAdmin().getUserType() != null ? tenant.getTenantAdmin().getUserType().toString() : null)
+                    .name(tenant.getTenantAdmin().getFullName())
+                    .email(tenant.getTenantAdmin().getEmail())
+                    .phone(tenant.getTenantAdmin().getPhone())
+                    .build();
+        }
+
+        // Map Applications (Application Entity -> ApplicationDto)
+        Set<ApplicationDto> applicationDtos = null;
+        if (tenant.getApplications() != null && !tenant.getApplications().isEmpty()) {
+            applicationDtos = tenant.getApplications().stream()
+                    .map(app -> ApplicationDto.builder()
+                            .id(app.getId())
+                            .appName(app.getAppName())
+                            .appKey(app.getAppKey())
+                            .description(app.getDescription())
+                            .isActive(app.getIsActive())
+                            .build())
+                    .collect(Collectors.toSet());
+        }
+
+        SubscriptionDto subscriptionDto = subscriptionRepository
+                .findPrimaryActiveSubscription(tenant.getId(), SubscriptionStatus.ACTIVE)
+                .map(this::mapToSubscriptionDto)
+                .orElse(null);
+
+        // Build and Return TenantDto
+        return TenantDto.builder()
+                .id(tenant.getId())
+                .tenantUuid(tenant.getTenantUuid())
+                .tenantName(tenant.getTenantName())
+                .tenantCode(tenant.getTenantCode())
+                .email(adminDto != null ? adminDto.getEmail() : null)
+                .phone(adminDto != null ? adminDto.getPhone() : null)
+                .isActive(tenant.getIsActive())
+                .tenantAdmin(adminDto)
+                .applications(applicationDtos)
+                .tenantAddress(addressDtos)
+                .tenantDetails(mapEntityToDto(tenant.getTenantDetails()))
+                .subscription(subscriptionDto)
+                .build();
+    }
+
+    private SubscriptionDto mapToSubscriptionDto(Subscription subscription) {
+        long daysRemaining = 0;
+        LocalDateTime now = LocalDateTime.now();
+        if (subscription.getEndDate() != null && now.isBefore(subscription.getEndDate())) {
+            daysRemaining = Duration.between(now, subscription.getEndDate()).toDays();
+        }
+
+        SubscriptionPlan plan = subscription.getPlan();
+        SubscriptionPlanDto planDto = SubscriptionPlanDto.builder()
+                .id(plan.getId())
+                .applicationId(plan.getApplication().getId())
+                .name(plan.getName())
+                .description(plan.getDescription())
+                .type(plan.getType())
+                .price(plan.getPrice())
+                .durationDays(plan.getDurationDays())
+                .maxUsers(plan.getMaxUsers())
+                .isActive(plan.getIsActive())
+                .build();
+
+        return SubscriptionDto.builder()
+                .id(subscription.getId())
+                .plan(planDto)
+                .status(subscription.getStatus())
+                .startDate(subscription.getStartDate())
+                .endDate(subscription.getEndDate())
+                .autoRenew(subscription.getAutoRenew())
+                .createdAt(subscription.getCreatedAt())
+                .isValid(subscription.isValid())
+                .daysRemaining(daysRemaining)
+                .build();
+    }
+
+
+    /**
+     * Helper to handle Address Upsert (Update if exists, Insert if new)
+     */
+    private void handleAddressUpdate(Tenant tenant, AddressDto addressDto) {
+        if (tenant.getAddresses() == null) {
+            tenant.setAddresses(new HashSet<>());
+        }
+
+        Address existingAddress = tenant.getAddresses().stream()
+                .filter(a -> (addressDto.getId() != null && a.getId().equals(addressDto.getId())) ||
+                        (a.getAddressType() == addressDto.getType()))
+                .findFirst()
+                .orElse(null);
+
+        if (existingAddress != null) {
+            existingAddress.setAddressLine1(addressDto.getAddressLine1());
+            existingAddress.setAddressLine2(addressDto.getAddressLine2());
+            existingAddress.setCity(addressDto.getCity());
+            existingAddress.setState(addressDto.getState());
+            existingAddress.setCountry(addressDto.getCountry());
+            existingAddress.setPinCode(addressDto.getPinCode());
+            existingAddress.setAddressType(addressDto.getType());
+        } else {
+            Address newAddress = Address.builder()
+                    .entityType(EntityType.TENANT)
+                    .entityId(tenant.getId())
+                    .addressLine1(addressDto.getAddressLine1())
+                    .addressLine2(addressDto.getAddressLine2())
+                    .city(addressDto.getCity())
+                    .state(addressDto.getState())
+                    .country(addressDto.getCountry())
+                    .pinCode(addressDto.getPinCode())
+                    .addressType(addressDto.getType())
+                    .build();
+
+            tenant.getAddresses().add(newAddress);
+        }
+    }
+
+
+    private TenantDetails mapDtoToEntity(TenantDetailsDto dto) {
+        return TenantDetails.builder()
+                .legalName(dto.getLegalName())
+                .businessType(dto.getBusinessType())
+                .baseCurrency(dto.getBaseCurrency())
+                .timeZone(dto.getTimeZone())
+                .gstNumber(dto.getGstNumber())
+                .panNumber(dto.getPanNumber())
+                .supportEmail(dto.getSupportEmail())
+                .contactPhone(dto.getContactPhone())
+                .website(dto.getWebsite())
+                .logoUrl(dto.getLogoUrl())
+                .build();
+    }
+
+    private TenantDetailsDto mapEntityToDto(TenantDetails entity) {
+        return TenantDetailsDto.builder()
+                .legalName(entity.getLegalName())
+                .businessType(entity.getBusinessType())
+                .baseCurrency(entity.getBaseCurrency())
+                .timeZone(entity.getTimeZone())
+                .gstNumber(entity.getGstNumber())
+                .panNumber(entity.getPanNumber())
+                .supportEmail(entity.getSupportEmail())
+                .contactPhone(entity.getContactPhone())
+                .website(entity.getWebsite())
+                .logoUrl(entity.getLogoUrl())
+                .build();
+    }
+
+    /** The free plan of the app the tenant signed up for (each app has its own trial). */
+    private SubscriptionPlan trialPlanFor(Application app) {
+        return subscriptionPlanRepository
+                .findFirstByApplication_IdAndPriceAndIsActiveTrueOrderByIdAsc(app.getId(), BigDecimal.ZERO)
+                .or(() -> subscriptionPlanRepository.findByName("Free Trial"))
+                .orElseThrow(() -> new CommonException("Default subscription plan not found. Contact support.", HttpStatus.INTERNAL_SERVER_ERROR));
+    }
+}

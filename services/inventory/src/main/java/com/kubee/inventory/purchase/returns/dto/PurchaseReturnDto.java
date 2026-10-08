@@ -1,0 +1,27 @@
+package com.kubee.inventory.purchase.returns.dto;
+
+import com.kubee.inventory.purchase.returns.entity.ReturnStatus;
+import com.kubee.inventory.utils.common.dto.UserMiniDto;
+import lombok.*;
+
+import java.util.Date;
+import java.util.List;
+
+@Getter
+@Setter
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+public class PurchaseReturnDto {
+    private Long id;
+    private Long vendorId;
+    private Long warehouseId;
+    private String prNumber;
+    private Long goodsReceiptId; // Optional link
+    private String goodsReceiptNumber;
+    private String reason;
+    private ReturnStatus status;
+    private UserMiniDto vendorDetails;
+    private Date createdAt;
+    private List<PurchaseReturnItemDto> items;
+}

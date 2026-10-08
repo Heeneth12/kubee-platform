@@ -1,0 +1,36 @@
+package com.kubee.auth.support.dto;
+
+import com.kubee.auth.support.entity.SupportCategory;
+import com.kubee.auth.support.entity.SupportPriority;
+import jakarta.validation.constraints.NotBlank;
+import lombok.*;
+
+import java.util.Map;
+
+@Getter
+@Setter
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+public class CreateAppRequestDto {
+
+    private String contactEmail;
+
+    private String contactName;
+
+    @NotBlank(message = "Subject is required")
+    private String subject;
+
+    @NotBlank(message = "Description is required")
+    private String description;
+
+    private SupportCategory category;
+
+    private SupportPriority priority;
+
+    private String sourceUrl;
+
+    private String sourceName;
+
+    private Map<String, Object> metadata;
+}

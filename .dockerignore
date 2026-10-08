@@ -1,0 +1,8 @@
+**/target/
+.git/
+.idea/
+.vscode/
+**/*.iml
+**/src/main/resources/application-local.properties
+**/.llm-index/
+.env

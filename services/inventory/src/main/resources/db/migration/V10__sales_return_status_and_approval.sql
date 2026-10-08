@@ -1,0 +1,5 @@
+CREATE SCHEMA IF NOT EXISTS inventory;
+SET search_path TO inventory;
+
+ALTER TABLE sales_return
+    ADD COLUMN IF NOT EXISTS status VARCHAR(50) NOT NULL DEFAULT 'APPROVED';

@@ -1,0 +1,16 @@
+package com.kubee.auth.user.dto;
+
+
+import lombok.*;
+
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class UserRoleDto {
+    private Long id;
+    private String roleKey;
+    private String roleName;
+    private Long roleId;
+}

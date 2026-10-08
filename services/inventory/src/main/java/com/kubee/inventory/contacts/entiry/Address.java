@@ -1,0 +1,32 @@
+package com.kubee.inventory.contacts.entiry;
+
+import com.kubee.common.CommonSerializable;
+import jakarta.persistence.*;
+import lombok.*;
+
+@Entity
+@Table(name = "address")
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class Address extends CommonSerializable {
+
+    private String addressLine1;
+    private String addressLine2;
+    private String route;
+    private String area;
+    private String city;
+    private String state;
+    private String country;
+    private String pinCode;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "address_type", nullable = false, length = 50)
+    private AddressType addressType;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "contact_id")
+    private Contact contact;
+}

@@ -1,0 +1,162 @@
+package com.kubee.auth.tenant.controller;
+
+import com.kubee.auth.branch.dto.BranchDto;
+import com.kubee.auth.branch.service.BranchService;
+import com.kubee.auth.common.dto.AddressDto;
+import com.kubee.auth.common.service.AccessService;
+import com.kubee.auth.tenant.dto.*;
+import com.kubee.auth.tenant.service.TenantService;
+import com.kubee.security.UserContextUtil;
+import com.kubee.common.CommonResponse;
+import com.kubee.common.ResponseResource;
+import com.kubee.common.CommonException;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.Map;
+
+@Slf4j
+@RestController
+@RequestMapping("/api/v1/tenant")
+@RequiredArgsConstructor
+public class TenantController {
+
+    private final TenantService tenantService;
+    private final BranchService branchService;
+    private final AccessService accessService;
+
+    @PostMapping(value = "/all", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<Page<TenantDto>> getAllTenants(@RequestParam Integer page, @RequestParam Integer size) throws CommonException {
+        log.info("Entered get all tenants details with filter");
+        UserContextUtil.requirePlatformAccess();
+        Page<TenantDto> response = tenantService.getTenants(page, size);
+        return ResponseResource.success(HttpStatus.OK, response, "All tenants fetched successfully");
+    }
+
+    @GetMapping(value = "/bulk", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<Map<Long, TenantDto>> getBulkTenants(@RequestParam("ids") List<Long> ids) throws CommonException {
+        log.info("Entered get bulk tenants details");
+        Map<Long, TenantDto> response = tenantService.getTenantsByIds(ids);
+        return ResponseResource.success(HttpStatus.OK, response, "Bulk tenants fetched successfully");
+    }
+
+    @PutMapping(value = "/{tenantId}", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<CommonResponse> updateTenant(@PathVariable Long tenantId, @Valid @RequestBody TenantRegistrationRequest request) throws CommonException {
+        log.info("Entered updateTenant details with : {}", request);
+        UserContextUtil.requireTenantAccess(tenantId);
+        accessService.requireSettingsEditor();
+        CommonResponse response = tenantService.updateTenant(tenantId, request);
+        return ResponseResource.success(HttpStatus.OK, response, "Tenants updated successfully");
+    }
+
+    @GetMapping(value = "/{tenantId}", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<TenantDto> getTenantById(@PathVariable Long tenantId) throws CommonException {
+        log.info("Fetching tenant details for ID: {}", tenantId);
+        UserContextUtil.requireTenantAccess(tenantId);
+        TenantDto response = tenantService.getTenantById(tenantId);
+        return ResponseResource.success(HttpStatus.OK, response, "Tenant details fetched successfully");
+    }
+
+    @PostMapping(value = "/{tenantId}/details", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<CommonResponse> createTenantDetails(
+            @PathVariable Long tenantId,
+            @Valid @RequestBody TenantDetailsDto request) throws CommonException {
+        log.info("Creating business details for tenant ID: {}", tenantId);
+        UserContextUtil.requireTenantAccess(tenantId);
+        accessService.requireSettingsEditor();
+        CommonResponse response = tenantService.createTenantDetails(tenantId, request);
+        return ResponseResource.success(HttpStatus.CREATED, response, "Tenant business details created successfully");
+    }
+
+    @PutMapping(value = "/{tenantId}/details", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<CommonResponse> updateTenantDetails(
+            @PathVariable Long tenantId,
+            @Valid @RequestBody TenantDetailsDto request) throws CommonException {
+        log.info("Updating business details for tenant ID: {}", tenantId);
+        UserContextUtil.requireTenantAccess(tenantId);
+        accessService.requireSettingsEditor();
+        CommonResponse response = tenantService.updateTenantDetails(tenantId, request);
+        return ResponseResource.success(HttpStatus.OK, response, "Tenant business details updated successfully");
+    }
+
+    @GetMapping(value = "/{tenantId}/details", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<TenantDetailsDto> getTenantDetails(@PathVariable Long tenantId) throws CommonException {
+        log.info("Fetching business details for tenant ID: {}", tenantId);
+        UserContextUtil.requireTenantAccess(tenantId);
+        TenantDetailsDto response = tenantService.getTenantDetailsByTenantId(tenantId);
+        return ResponseResource.success(HttpStatus.OK, response, "Tenant business details fetched successfully");
+    }
+
+    @PostMapping(value = "/{tenantId}/address", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<CommonResponse> createTenantAddress(
+            @PathVariable Long tenantId,
+            @Valid @RequestBody AddressDto request) throws CommonException {
+        log.info("Creating address for tenant ID: {}", tenantId);
+        UserContextUtil.requireTenantAccess(tenantId);
+        accessService.requireSettingsEditor();
+        CommonResponse response = tenantService.createTenantAddress(tenantId, request);
+        return ResponseResource.success(HttpStatus.CREATED, response, "Tenant address created successfully");
+    }
+
+    @PutMapping(value = "/{tenantId}/address/{addressId}", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<CommonResponse> updateTenantAddress(
+            @PathVariable Long tenantId,
+            @PathVariable Long addressId,
+            @Valid @RequestBody AddressDto request) throws CommonException {
+        log.info("Updating address {} for tenant ID: {}", addressId, tenantId);
+        UserContextUtil.requireTenantAccess(tenantId);
+        accessService.requireSettingsEditor();
+        CommonResponse response = tenantService.updateTenantAddress(tenantId, addressId, request);
+        return ResponseResource.success(HttpStatus.OK, response, "Tenant address updated successfully");
+    }
+
+    @GetMapping(value = "/current", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<TenantDto> getCurrentTenant() throws CommonException {
+        log.info("Fetching current tenant");
+        Long tenantId = UserContextUtil.getTenantIdOrThrow();
+        TenantDto response = tenantService.getTenantById(tenantId);
+        return ResponseResource.success(HttpStatus.OK, response, "Current tenant fetched successfully");
+    }
+
+    @PutMapping(value = "/{tenantId}/toggle-status", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<CommonResponse> toggleTenantStatus(@PathVariable Long tenantId) throws CommonException {
+        log.info("Toggling status for tenant ID: {}", tenantId);
+        UserContextUtil.requirePlatformAccess();
+        CommonResponse response = tenantService.toggleTenantStatus(tenantId);
+        return ResponseResource.success(HttpStatus.OK, response, response.getMessage());
+    }
+
+    @DeleteMapping(value = "/{tenantId}/address/{addressId}", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<CommonResponse> deleteTenantAddress(
+            @PathVariable Long tenantId,
+            @PathVariable Long addressId) throws CommonException {
+        log.info("Deleting address {} for tenant ID: {}", addressId, tenantId);
+        UserContextUtil.requireTenantAccess(tenantId);
+        accessService.requireSettingsEditor();
+        CommonResponse response = tenantService.deleteTenantAddress(tenantId, addressId);
+        return ResponseResource.success(HttpStatus.OK, response, "Tenant address deleted successfully");
+    }
+
+    // ─── Branch APIs ─────────────────────────────────────────────────────────
+
+    @GetMapping(value = "/{tenantId}/branches", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<List<BranchDto.Response>> getTenantBranches(@PathVariable Long tenantId) throws CommonException {
+        log.info("Fetching all branches for tenant ID: {}", tenantId);
+        UserContextUtil.requireTenantAccess(tenantId);
+        return ResponseResource.success(HttpStatus.OK, branchService.getBranchesByTenantId(tenantId), "Tenant branches fetched successfully");
+    }
+
+    @GetMapping(value = "/{tenantId}/branches/summary", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<List<BranchDto.Summary>> getTenantBranchSummaries(@PathVariable Long tenantId) throws CommonException {
+        log.info("Fetching active branch summaries for tenant ID: {}", tenantId);
+        UserContextUtil.requireTenantAccess(tenantId);
+        return ResponseResource.success(HttpStatus.OK, branchService.getActiveBranchSummariesByTenantId(tenantId), "Tenant branch summaries fetched successfully");
+    }
+
+}

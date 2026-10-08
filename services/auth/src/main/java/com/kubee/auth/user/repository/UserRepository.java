@@ -1,0 +1,83 @@
+package com.kubee.auth.user.repository;
+
+import com.kubee.auth.user.dto.UserMiniDto;
+import com.kubee.auth.user.entity.AccountScope;
+import com.kubee.auth.user.entity.User;
+import com.kubee.auth.user.entity.UserType;
+import com.kubee.auth.user.repository.projection.UserMiniProjection;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+import java.util.Optional;
+
+@Repository
+public interface UserRepository extends JpaRepository<User, Long> {
+
+    Optional<User> findByEmail(String email);
+
+    Optional<User> findByIdAndTenant_Id(Long id, Long tenantId);
+
+    List<User> findByTenant_Id(Long tenantId);
+
+    Boolean existsByEmail(String email);
+
+    boolean existsByAccountScope(AccountScope accountScope);
+
+    long countByTenant_IdAndIsActive(Long tenantId, Boolean isActive);
+
+    long countByBranch_Id(Long branchId);
+
+    List<User> findByBranch_IdAndTenant_Id(Long branchId, Long tenantId);
+
+    @Query(value = """
+            SELECT 
+                u.id, 
+                u.user_type as userType, 
+                u.user_uuid as userUuid, 
+                u.full_name as fullName,
+                u.email as email,
+                u.phone as phone
+            FROM users u 
+            WHERE u.id IN (:userIds)
+            """, nativeQuery = true)
+    List<UserMiniProjection> findUserMini(@Param("userIds") List<Long> userIds);
+
+    @Query("SELECT u.id FROM User u WHERE u.id IN :userIds AND u.tenant.id = :tenantId")
+    List<Long> findIdsInTenant(@Param("userIds") List<Long> userIds, @Param("tenantId") Long tenantId);
+
+    @Query("SELECT DISTINCT u FROM User u LEFT JOIN FETCH u.addresses WHERE u.id IN :userIds")
+    List<User> findUsersWithAddressesByIds(@Param("userIds") List<Long> userIds);
+
+    @Query("""
+                SELECT u FROM User u
+                WHERE (:tenantId IS NULL OR u.tenant.id = :tenantId)
+                AND (:userId IS NULL OR u.id = :userId)
+                AND (:userUuid IS NULL OR u.userUuid = :userUuid)
+                AND (:email IS NULL OR LOWER(u.email) = :email)
+                AND (:phone IS NULL OR u.phone = :phone)
+                AND (:userType IS NULL OR u.userType IN :userType)
+                AND (:isActive IS NULL OR u.isActive = :isActive)
+                AND (
+                    :search IS NULL OR
+                    LOWER(u.fullName) LIKE CONCAT('%', CAST(:search AS string), '%') OR
+                    LOWER(u.email)    LIKE CONCAT('%', CAST(:search AS string), '%') OR
+                    u.phone           LIKE CONCAT('%', CAST(:search AS string), '%')
+                )
+            """)
+    Page<User> findUsersWithAllFilters(
+            @Param("tenantId") Long tenantId,
+            @Param("userId") Long userId,
+            @Param("userUuid") String userUuid,
+            @Param("email") String email,
+            @Param("phone") String phone,
+            @Param("search") String search,
+            @Param("userType") List<UserType> userTypes,
+            @Param("isActive") Boolean isActive,
+            Pageable pageable
+    );
+}

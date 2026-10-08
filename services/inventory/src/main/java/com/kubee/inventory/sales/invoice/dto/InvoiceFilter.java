@@ -1,0 +1,22 @@
+package com.kubee.inventory.sales.invoice.dto;
+
+import com.kubee.inventory.sales.invoice.entity.InvoicePaymentStatus;
+import com.kubee.inventory.sales.invoice.entity.InvoiceStatus;
+import com.kubee.inventory.utils.common.CommonFilter;
+import lombok.*;
+import lombok.experimental.SuperBuilder;
+
+import java.util.List;
+
+@Getter
+@Setter
+@SuperBuilder
+@NoArgsConstructor
+@AllArgsConstructor
+public class InvoiceFilter extends CommonFilter {
+    private Long customerId;
+    private Long salesOrderId;
+    private String InvoiceNumber;
+    private List<InvoiceStatus> invStatuses;
+    private List<InvoicePaymentStatus> paymentStatus;
+}

@@ -1,0 +1,20 @@
+package com.kubee.auth.common.dto;
+
+import lombok.*;
+
+import java.util.Set;
+
+
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class ApplicationDto {
+    private Long id;
+    private String appName;
+    private String appKey;
+    private String description;
+    private Boolean isActive = true;
+    private Set<ModuleDto> modules;
+}

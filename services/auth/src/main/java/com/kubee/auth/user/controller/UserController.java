@@ -1,0 +1,127 @@
+package com.kubee.auth.user.controller;
+
+import com.kubee.auth.common.dto.AddressDto;
+import com.kubee.auth.user.dto.CreateUserRequest;
+import com.kubee.security.UserContextUtil;
+import jakarta.validation.Valid;
+import java.util.Set;
+import com.kubee.auth.user.dto.UserDto;
+import com.kubee.auth.user.dto.UserFilter;
+import com.kubee.auth.user.dto.UserMiniDto;
+import com.kubee.auth.user.service.UserService;
+import com.kubee.common.CommonResponse;
+import com.kubee.common.ResponseResource;
+import com.kubee.common.CommonException;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.Map;
+
+@Slf4j
+@RestController
+@RequestMapping("/api/v1/user")
+@RequiredArgsConstructor
+public class UserController {
+
+    private final UserService userService;
+
+
+    @PostMapping(value = "/create", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<CommonResponse> createUser(@Valid @RequestBody CreateUserRequest request) throws CommonException {
+        log.info("Entered Creating new user with email: {}", request.getEmail());
+        CommonResponse response = userService.createUser(request);
+        return ResponseResource.success(HttpStatus.CREATED, response, "User created successfully");
+    }
+
+    @PostMapping(value = "/all", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<Page<UserDto>> getAllUsers(@RequestParam Integer page, @RequestParam Integer size,
+                                                       @RequestBody UserFilter filter) throws CommonException {
+        log.info("Entered get all users details");
+        Page<UserDto> response = userService.getAllUsers(filter, page, size);
+        return ResponseResource.success(HttpStatus.OK, response, "All users fetched successfully");
+    }
+
+    @GetMapping(value = "/bulk", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<Map<Long, UserMiniDto>> getBulkUsers(
+            @RequestParam("ids") List<Long> ids,
+            @RequestParam(value = "address", required = false, defaultValue = "false") boolean includeAddress
+    ) throws CommonException {
+        log.info("Entered get bulk User details");
+        Map<Long, UserMiniDto> response = userService.getUsersMiniByIds(ids, includeAddress);
+        return ResponseResource.success(HttpStatus.OK, response, "Bulk user fetched successfully");
+    }
+
+    @GetMapping(value = "/{userId}", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<UserDto> getUserById(@PathVariable Long userId) throws CommonException {
+        log.info("Fetching user with ID: {}", userId);
+        UserDto response = userService.getUserById(userId, true);
+        return ResponseResource.success(HttpStatus.OK, response, "User fetched successfully");
+    }
+
+    @PutMapping(value = "/{userId}", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<CommonResponse> updateUser(@PathVariable Long userId, @Valid @RequestBody CreateUserRequest request) throws CommonException {
+        log.info("Updating user with ID: {}", userId);
+        CommonResponse response = userService.updateUser(userId, request);
+        return ResponseResource.success(HttpStatus.OK, response, "User updated successfully");
+    }
+
+    @PutMapping(value = "/{userId}/toggle-status", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<CommonResponse> toggleUserStatus(@PathVariable Long userId) throws CommonException {
+        log.info("Deleting user with ID: {}", userId);
+        CommonResponse response = userService.toggleUserStatus(userId);
+        return ResponseResource.success(HttpStatus.OK, response, "User deleted successfully");
+    }
+
+    @PostMapping(value = "/search", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<Page<UserDto>> searchUsers(
+            @RequestParam(defaultValue = "0") Integer page,
+            @RequestParam(defaultValue = "50") Integer size,
+            @RequestBody UserFilter filter) throws CommonException {
+        log.info("Entered search users");
+        Page<UserDto> response = userService.searchUsers(filter, page, size);
+        return ResponseResource.success(HttpStatus.OK, response, "Users fetched successfully");
+    }
+
+    @PostMapping(value = "/{userId}/address", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<CommonResponse> addUserAddress(@PathVariable Long userId, @RequestBody AddressDto request) throws CommonException {
+        log.info("Adding address for user with ID: {}", userId);
+        CommonResponse response = userService.addUserAddress(userId, request);
+        return ResponseResource.success(HttpStatus.CREATED, response, "User address created successfully");
+    }
+
+    @PutMapping(value = "/{userId}/address/{addressId}", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<CommonResponse> updateUserAddress(@PathVariable Long userId, @PathVariable Long addressId, @RequestBody AddressDto request) throws CommonException {
+        log.info("Updating address for user with ID: {} and addressId: {}", userId, addressId);
+        CommonResponse response = userService.updateUserAddress(userId, addressId, request);
+        return ResponseResource.success(HttpStatus.OK, response, "User address updated successfully");
+    }
+
+    @GetMapping(value = "/me", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<UserDto> getCurrentUser() throws CommonException {
+        log.info("Fetching current user profile");
+        Long userId = UserContextUtil.getUserIdOrThrow();
+        UserDto response = userService.getUserById(userId, true);
+        return ResponseResource.success(HttpStatus.OK, response, "Current user fetched successfully");
+    }
+
+    @GetMapping(value = "/{userId}/addresses", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<Set<AddressDto>> getUserAddresses(@PathVariable Long userId) throws CommonException {
+        log.info("Fetching addresses for user ID: {}", userId);
+        Set<AddressDto> response = userService.getUserAddresses(userId);
+        return ResponseResource.success(HttpStatus.OK, response, "User addresses fetched successfully");
+    }
+
+    @DeleteMapping(value = "/{userId}/address/{addressId}", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseResource<CommonResponse> deleteUserAddress(
+            @PathVariable Long userId,
+            @PathVariable Long addressId) throws CommonException {
+        log.info("Deleting address {} for user ID: {}", addressId, userId);
+        CommonResponse response = userService.deleteUserAddress(userId, addressId);
+        return ResponseResource.success(HttpStatus.OK, response, "Address deleted successfully");
+    }
+}
